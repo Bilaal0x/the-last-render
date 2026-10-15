@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["hud", "beauty", "commands", "svg_tree", "source", "composite", "tools/sfx"]
+default-members = ["composite"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+fframes = { version = "=1.2.0", features = ["compile-time-svgtree", "cli"] }
+fframes_skia_renderer = { version = "=1.2.0" }
+fframes_native_player = { version = "=1.2.0", default-features = false, features = ["audio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+hud = { path = "hud" }
+beauty = { path = "beauty" }
+commands = { path = "commands" }
+svg_tree = { path = "svg_tree" }
+source = { path = "source" }
+sfx = { path = "tools/sfx" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

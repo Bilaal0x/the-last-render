@@ -1,0 +1,11 @@
+[package]
+name = "svg_tree"
+description = "Pass 3: the SVG tree floating in 3-D"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fframes.workspace = true
+hud.workspace = true
+beauty.workspace = true

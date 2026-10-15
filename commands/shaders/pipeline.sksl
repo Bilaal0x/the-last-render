@@ -1,0 +1,246 @@
+// The Last Render: one shader, four modes.
+//
+//   uMode.x  beauty reconstruction  the baked beauty pass (iChannel0) as a plane in 3-D
+//   uMode.y  command buffer         that plane split into triangles, one per draw, slices
+//                                   pulled toward the camera, fragments flickering
+//   uMode.z  wireframe tree         the empty depth planes the SVG tree floats between
+//   uMode.w  source particles       glyph particles drifting around the source plane
+//
+// uPost = 1 turns the same file into the overlay pass: film grain and vignette.
+// World units are pixels of the finished frame: the beauty frame spans 0..1920 x 0..1080
+// on the plane z = 0, +z points away from the camera.
+
+uniform float3 iResolution;
+uniform shader iChannel0;
+uniform float2 uImageSize;
+
+uniform float4 uMode;
+uniform float uPost;
+
+uniform float3 uCam;
+uniform float uRoll;
+uniform float uFocal;
+uniform float uFocus;
+uniform float uAperture;
+uniform float uAberration;
+uniform float uGrain;
+
+uniform float uSplit;
+uniform float uScan;
+uniform float uCollapse;
+uniform float uClock;
+
+uniform float uCmdDepth;
+uniform float uTreeZ0;
+uniform float uTreeStep;
+uniform float uSourceZ;
+
+const float2 FRAME = float2(1920.0, 1080.0);
+const float CELL = 64.0;
+const float3 CYAN = float3(0.098, 0.941, 1.0);
+const float3 MAGENTA = float3(1.0, 0.31, 0.847);
+
+float hash21(float2 p) {
+    p = fract(p * float2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+// Camera ray through a screen pixel (z component is 1: distances are along the view axis).
+float3 rayDir(float2 px) {
+    float2 d = px - FRAME * 0.5;
+    d *= 1.0 + 60.0 * uCollapse * uCollapse * uCollapse;
+    float s = sin(-uRoll);
+    float c = cos(-uRoll);
+    d = float2(d.x * c - d.y * s, d.x * s + d.y * c);
+    return float3(d / uFocal, 1.0);
+}
+
+float2 hitPlane(float3 dir, float z) {
+    return uCam.xy + dir.xy * (z - uCam.z);
+}
+
+// Circle of confusion at a distance, converted to world units on that plane.
+float blurWorld(float dist) {
+    float coc = uAperture * abs(dist - uFocus) / max(dist, 1.0) * uFocal / uFocus;
+    return min(coc, 28.0) * dist / uFocal;
+}
+
+float3 tap(float2 w) {
+    return iChannel0.eval(clamp(w, float2(0.0), FRAME) / FRAME * uImageSize).rgb;
+}
+
+float3 beautyAt(float2 w, float blur) {
+    float3 acc = float3(0.0);
+    for (int i = 0; i < 9; i++) {
+        float fi = float(i);
+        float r = sqrt((fi + 0.5) / 9.0) * blur;
+        float a = fi * 2.39996;
+        acc += tap(w + r * float2(cos(a), sin(a)));
+    }
+    return acc / 9.0;
+}
+
+// Mode 0: the finished frame, a rectangle hanging in the dark.
+float4 beautyLayer(float3 dir) {
+    float dist = -uCam.z;
+    float2 w = hitPlane(dir, 0.0);
+    float blur = blurWorld(dist);
+    float2 e2 = min(w, FRAME - w);
+    float e = min(e2.x, e2.y);
+    float inside = smoothstep(-blur - 1.0, blur + 1.0, e);
+    float3 col = beautyAt(w, blur) * inside;
+    float px = dist / uFocal;
+    float reveal = smoothstep(1450.0, 1900.0, dist);
+    float border = (1.0 - smoothstep(px * 0.8, px * 2.6 + blur, abs(e))) * reveal;
+    col += CYAN * border * 0.55;
+    return float4(col, max(inside, border * 0.55));
+}
+
+// Mode 1: one triangle per draw, sorted into six slices that lift off the frame.
+float4 commandsLayer(float3 dir) {
+    float4 acc = float4(0.0);
+    for (int i = 0; i < 6; i++) {
+        float fk = float(5 - i);
+        float z = -fk / 5.0 * uCmdDepth * uSplit;
+        float dist = z - uCam.z;
+        float2 w = hitPlane(dir, z);
+        float2 g = w / CELL;
+        float2 cell = floor(g);
+        float2 f = fract(g);
+        float upper = step(1.0, f.x + f.y);
+        float h = hash21(cell * 1.7 + upper * 13.1 + 0.37);
+        float onFrame = step(0.0, w.x) * step(0.0, w.y) * step(w.x, FRAME.x) * step(w.y, FRAME.y);
+        float mine = onFrame * (1.0 - step(0.5, abs(floor(h * 6.0) - fk)));
+        if (mine > 0.5 && acc.a < 0.98) {
+            // Triangles shrink toward their centroid as the slices separate.
+            float2 c = mix(float2(1.0 / 3.0), float2(2.0 / 3.0), upper);
+            float shrink = 1.0 - 0.22 * uSplit;
+            float2 q = c + (f - c) / shrink;
+            float edge = mix(min(min(q.x, q.y), (1.0 - q.x - q.y) * 0.7071),
+                             min(min(1.0 - q.x, 1.0 - q.y), (q.x + q.y - 1.0) * 0.7071), upper);
+            float pxw = dist / uFocal / CELL;
+            float blur = blurWorld(dist) / CELL;
+            float fill = smoothstep(-pxw - blur, pxw + blur, edge);
+            float line = (1.0 - smoothstep(pxw * 0.6, pxw * 2.2 + blur, abs(edge))) ;
+
+            // Draw order follows the raster: top-left to bottom-right, a little shuffled.
+            float key = (cell.y * 30.0 + cell.x) / (17.0 * 30.0) * 0.82 + h * 0.16;
+            float run = smoothstep(key - 0.015, key + 0.05, uScan);
+            float flash = run * (1.0 - smoothstep(key + 0.03, key + 0.16, uScan));
+            float flatAmt = smoothstep(0.0, 0.55, run);
+            float hollow = smoothstep(0.35, 1.0, run);
+
+            float3 shaded = mix(beautyAt(w, blurWorld(dist) * 0.6), tap((cell + c) * CELL), flatAmt);
+            float2 fq = floor(w / 8.0);
+            float spark = step(0.86, hash21(fq + floor(uClock * 14.0) * 0.123)) * step(0.0, edge);
+            float3 wire = mix(CYAN, MAGENTA, step(0.78, h));
+
+            float3 col = shaded * mix(1.0, 0.16, hollow) * fill
+                + wire * line * (0.06 + 0.85 * run)
+                + float3(1.0) * spark * fill * (0.12 * run + 0.9 * flash)
+                + float3(0.9, 0.98, 1.0) * fill * flash * 0.35;
+            float a = clamp(max(fill * mix(1.0, 0.7, hollow), line * run), 0.0, 1.0);
+            acc.rgb += (1.0 - acc.a) * col;
+            acc.a += (1.0 - acc.a) * a;
+        }
+    }
+    return acc;
+}
+
+// Mode 2: the empty levels of the tree, frame-sized outlines with a dot lattice.
+float3 treeLayer(float3 dir) {
+    float3 acc = float3(0.0);
+    for (int k = 0; k < 6; k++) {
+        float fk = float(k);
+        float z = uTreeZ0 - fk * uTreeStep;
+        float dist = z - uCam.z;
+        if (dist > 80.0) {
+            float2 w = hitPlane(dir, z);
+            float px = dist / uFocal;
+            float blur = blurWorld(dist);
+            float2 e2 = min(w, FRAME - w);
+            float e = min(e2.x, e2.y);
+            float outline = 1.0 - smoothstep(px * 0.7, px * 2.0 + blur, abs(e));
+            float2 cellp = fract(w / 96.0) * 96.0 - 48.0;
+            float dots = (1.0 - smoothstep(px * 1.2, px * 2.6 + blur, length(cellp))) * step(0.0, e);
+            float fade = 1.0 / (1.0 + blur * 0.25);
+            acc += (CYAN * outline * 0.32 + float3(0.55, 0.75, 1.0) * dots * 0.22) * fade;
+        }
+    }
+    return acc;
+}
+
+// Mode 3: glyphs dissolved out of the source text, drifting through a slab of space.
+float3 sourceLayer(float3 dir) {
+    float3 acc = float3(0.0);
+    for (int k = 0; k < 8; k++) {
+        float fk = float(k);
+        float z = uSourceZ + (fk - 3.5) * 170.0;
+        float dist = z - uCam.z;
+        if (dist > 80.0) {
+            float2 w = hitPlane(dir, z);
+            w.y += uClock * (10.0 + fk * 5.0);
+            float2 cell = floor(w / float2(34.0, 52.0));
+            float2 g = fract(w / float2(34.0, 52.0)) * float2(34.0, 52.0);
+            float pick = hash21(cell + fk * 7.31);
+            if (pick > 0.955) {
+                // A 3x5 bitmap glyph chosen by the hash.
+                float2 bit = floor((g - float2(10.0, 13.0)) / float2(5.0, 5.2));
+                float inBox = step(0.0, bit.x) * step(bit.x, 2.0) * step(0.0, bit.y) * step(bit.y, 4.0);
+                float on = step(0.45, hash21(cell * 0.71 + bit * 3.3 + fk));
+                float blur = blurWorld(dist);
+                float soft = 1.0 / (1.0 + blur * 0.3);
+                float3 tint = mix(float3(1.0), tap(fract(cell * 0.0618) * FRAME), 0.35);
+                tint = mix(tint, CYAN, step(0.96, pick) * 0.6);
+                acc += tint * inBox * on * soft * 0.38;
+            }
+        }
+    }
+    return acc;
+}
+
+float3 scene(float2 px) {
+    float3 dir = rayDir(px);
+    float3 col = float3(0.0);
+    float ghost = (uMode.x + (1.0 - uMode.x) * 0.16) * (1.0 - uCollapse);
+    if (ghost > 0.001) {
+        float4 b = beautyLayer(dir);
+        col = b.rgb * ghost;
+    }
+    if (uMode.y > 0.001) {
+        float4 c = commandsLayer(dir);
+        col = c.rgb * uMode.y + col * (1.0 - c.a * uMode.y);
+    }
+    if (uMode.z > 0.001) {
+        col += treeLayer(dir) * uMode.z;
+    }
+    if (uMode.w > 0.001) {
+        col += sourceLayer(dir) * uMode.w;
+    }
+    return col * (1.0 - uCollapse);
+}
+
+float4 post(float2 px) {
+    float2 q = (px - FRAME * 0.5) / FRAME.y;
+    float vignette = smoothstep(0.45, 1.15, length(q * float2(0.9, 1.0)));
+    float seed = floor(uClock * 30.0);
+    float n = hash21(px + seed * float2(17.13, 31.71)) + hash21(px * 1.31 + seed * 3.7) - 1.0;
+    float add = max(n, 0.0) * uGrain;
+    float sub = max(-n, 0.0) * uGrain;
+    return float4(float3(add), clamp(vignette * 0.5 * (1.0 - uCollapse) + sub, 0.0, 1.0));
+}
+
+half4 main(float2 coord) {
+    if (uPost > 0.5) {
+        return half4(post(coord));
+    }
+    float3 col;
+    if (uAberration > 0.05) {
+        float2 off = (coord - FRAME * 0.5) / (FRAME.x * 0.5) * uAberration;
+        col = float3(scene(coord + off).r, scene(coord).g, scene(coord - off).b);
+    } else {
+        col = scene(coord);
+    }
+    return half4(col, 1.0);
+}

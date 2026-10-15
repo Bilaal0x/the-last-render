@@ -1,0 +1,32 @@
+[package]
+name = "composite"
+description = "Final pass: the continuous camera through all layers, and the CLI"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fframes.workspace = true
+hud.workspace = true
+beauty.workspace = true
+commands.workspace = true
+svg_tree.workspace = true
+source.workspace = true
+sfx.workspace = true
+
+# Metal on macOS, Vulkan everywhere else (one backend each, so prebuilt Skia matches).
+[target.'cfg(target_os = "macos")'.dependencies]
+fframes_skia_renderer = { workspace = true, features = ["metal"] }
+fframes_native_player = { workspace = true, features = ["metal"] }
+fframes = { workspace = true, features = ["h264", "libav-agree-gpl"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+fframes_skia_renderer = { workspace = true, features = ["vulkan"] }
+fframes_native_player = { workspace = true, features = ["vulkan"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+fframes = { workspace = true, features = ["h264", "libav-agree-gpl"] }
+
+[[bin]]
+name = "the-last-render"
+path = "src/main.rs"

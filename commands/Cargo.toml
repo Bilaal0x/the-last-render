@@ -1,0 +1,10 @@
+[package]
+name = "commands"
+description = "Pass 2: the GPU command buffer, one SkSL file in four modes"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fframes.workspace = true
+hud.workspace = true

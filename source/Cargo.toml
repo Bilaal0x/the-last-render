@@ -1,0 +1,11 @@
+[package]
+name = "source"
+description = "Pass 4: the Rust source that generated the frame"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fframes.workspace = true
+hud.workspace = true
+beauty.workspace = true

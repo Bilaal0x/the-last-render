@@ -1,0 +1,10 @@
+[package]
+name = "hud"
+description = "Shared timeline, camera, NodeRecord and tracks.json for The Last Render"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
